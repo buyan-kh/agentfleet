@@ -4,6 +4,12 @@ Run parallel AI coding agents on **git worktrees**: one CLI for init, terminals,
 
 Open source · MIT · **[github.com/buyan-kh/agentfleet](https://github.com/buyan-kh/agentfleet)**
 
+## Demo
+
+<video src="agentfleet2.mp4" controls playsinline muted width="720"></video>
+
+[Download the demo video](agentfleet2.mp4) if playback does not load in your viewer.
+
 ## Install
 
 **Recommended (global npm):**
