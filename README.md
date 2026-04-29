@@ -1,37 +1,38 @@
 # AgentFleet
 
-Run multiple coding agents in isolated git worktrees from one CLI.
+One CLI manages **coding agents across isolated git worktrees**: init config, spawn terminals, preview multi-service stacks, and sanity-check tooling.
 
-If AgentFleet helps your workflow, please star the project.
+---
+
+## Requirements
+
+| | |
+|---|---|
+| **Runtime** | Node.js **18+**, Python **3.11+**, **Git** |
+| **Agents** | CLIs you list in config (defaults assume **Claude Code** & **Codex** on `PATH`) |
+| **Context** | Run commands **inside a git repository** |
+
+---
 
 ## Install
 
 ```bash
-npm install -g @buyan14/agentfleet
+npm install -g @buyan14/agentfleet@latest
 agentfleet --help
 ```
 
-Requires Node.js 18+, Python 3.11+, Git, and the agent CLIs you configure.
+The global package ships the Python modules; the launcher sets `PYTHONPATH` so **`python3` must be available** (`AGENTFLEET_PYTHON` overrides the interpreter).
 
-## Give This To Your AI Agent
+**Dev / without npm:** clone this repo, then `PYTHONPATH=. python -m agent_fleet.cli`.
 
-Paste this into the repo where you want AgentFleet:
+Details, PATH checks, and uninstall: **[docs/installation.md](docs/installation.md)**.
 
-```text
-Configure AgentFleet for this repository.
+---
 
-1. Create or update agentfleet.toml.
-2. Keep the default fleet at 2 Codex agents and 2 Claude agents unless this repo needs something else.
-3. Inspect the project and add [[preview.services]] for the local services needed to preview work.
-4. For each preview service set name, dir, port_base, command using {port}, and env values if needed.
-5. Mark the browser-facing service with primary = true.
-6. Run `agentfleet doctor` and explain any failures.
-7. If this is frontend-only, backend-only, Docker-only, mobile, or multi-service, configure the closest useful setup and explain the tradeoff.
-```
-
-## Quick Start
+## Quick start
 
 ```bash
+git clone <your-repo> && cd <your-repo>
 agentfleet init
 agentfleet doctor
 agentfleet setup
@@ -39,19 +40,31 @@ agentfleet launch --terminal ghostty-splits --ghostty-size 180x50
 agentfleet preview
 ```
 
-Terminal options:
+| Command | Purpose |
+|---------|---------|
+| `init` | Write `agentfleet.toml` |
+| `doctor` | Verify CLIs, Python, repos |
+| `setup` | Create worktrees for the fleet |
+| `launch` | Open terminals (see terminals below) |
+| `preview` | Dashboard + preview services (needs `[[preview.services]]`) |
 
-- `ghostty-splits`: one Ghostty window with native split panes. Experimental on macOS; may need Accessibility permission.
-- `ghostty`: separate Ghostty windows.
-- `tmux`: one tmux session.
-- `iterm`: separate iTerm tabs/windows.
-- `print`: print the commands instead of launching.
+---
 
-Use `--ghostty-size COLSxROWS`, for example `--ghostty-size 180x50`, to start a larger Ghostty workspace.
+## Terminals (`launch`)
 
-## Preview Services
+| `--terminal` | Notes |
+|----------------|-------|
+| `ghostty-splits` | One window, tiled panes (macOS may need **Accessibility**) |
+| `ghostty` | One window per agent |
+| `tmux` | Single tmux session |
+| `iterm` | iTerm tabs/windows |
+| `print` | Print commands only |
 
-AgentFleet is stack-agnostic. Describe any service shape in `agentfleet.toml`:
+---
+
+## Preview services
+
+Define stack in **`agentfleet.toml`** (frontend, API, Docker, mobile proxies—anything):
 
 ```toml
 [preview]
@@ -65,25 +78,53 @@ command = "python -m uvicorn app.main:app --host 127.0.0.1 --port {port} --reloa
 
 [[preview.services]]
 name = "web"
-dir = "app"
+dir = "frontend"
 port_base = 3000
 command = "npm run dev -- --port {port}"
 primary = true
 env = { NEXT_PUBLIC_API_URL = "{api_url}" }
 ```
 
-Placeholders: `{port}`, `{service_url}`, `{api_url}`, `{ui_url}`, `{worktree}`.
+Reserved placeholders include `{port}`, `{service_url}`, `{api_url}`, `{ui_url}`, `{worktree}`.
 
-This supports frontend-only, backend-only, UI+API, Docker commands, mobile companion servers, and multi-service apps.
+---
 
-## Useful Commands
+## Hand off to your AI
+
+Paste into the assistant working on **this repo**:
+
+```
+Configure AgentFleet for this repository.
+
+1. Create or update agentfleet.toml.
+2. Keep the default fleet at 2 Codex agents and 2 Claude agents unless this repo needs something else.
+3. Inspect the project and add [[preview.services]] for the local services needed to preview work.
+4. For each preview service set name, dir, port_base, command using {port}, and env values if needed.
+5. Mark the browser-facing service with primary = true.
+6. Run `agentfleet doctor` and explain any failures.
+7. If this is frontend-only, backend-only, Docker-only, mobile, or multi-service, configure the closest useful setup and explain the tradeoff.
+```
+
+(Same checklist appears after **`agentfleet init`** and **`agentfleet preview`** when preview is unset.)
+
+---
+
+## More commands
 
 ```bash
 agentfleet status
 agentfleet stop
 agentfleet clean
 agentfleet tasks --out agentfleet-tasks.yaml
+agentfleet upgrade          # npm global → latest
 ```
 
-`agentfleet tasks` only writes a task scaffold today. A future version can use that file to dispatch work across agents.
+---
 
+## Troubleshooting
+
+1. **`agentfleet doctor`** — single source of truth for misconfig.
+2. **Stale global install:** `npm install -g @buyan14/agentfleet@latest` or `agentfleet upgrade`.
+3. **Not in a repo:** AgentFleet resolves paths from **`git`**; run inside a checkout.
+
+MIT · If AgentFleet helps your workflow, a star on the repo is appreciated.

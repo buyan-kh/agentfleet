@@ -9,7 +9,8 @@
     "agent_fleet/*.py",
     "bin/agentfleet.js",
     "pyproject.toml",
-    "README.md"
+    "README.md",
+    "docs/installation.md"
   ],
   "scripts": {
     "smoke": "node bin/agentfleet.js --help"
