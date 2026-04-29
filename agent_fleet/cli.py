@@ -194,8 +194,14 @@ def print_onboarding() -> None:
     """Print a compact orientation screen for first-time CLI usage."""
 
     print(
-        """AgentFleet
-Run coding agents in isolated git worktrees.
+        r"""    ___                    __  ______          __
+   /   |  ____ ____  ____ / /_/ ____/___  ___ / /_
+  / /| | / __ `/ _ \/ __ `/ __/ /_  / _ \/ _ `/ __/
+ / ___ |/ /_/ /  __/ /_/ / /_/ __/ /  __/  __/ /_
+/_/  |_|\__, /\___/\__,_/\__/_/    \___/\___/\__/
+       /____/
+
+AgentFleet: run coding agents in isolated git worktrees.
 
 Start here:
   agentfleet init
