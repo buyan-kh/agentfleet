@@ -154,6 +154,7 @@ def launch_fleet(
     session: str | None,
     no_attach: bool,
     tmux_layout: str = "panes",
+    ghostty_size: str | None = None,
 ) -> None:
     """Launch each agent in its own terminal context."""
 
@@ -163,9 +164,9 @@ def launch_fleet(
     elif chosen == "iterm":
         launch_iterm(slots)
     elif chosen == "ghostty":
-        launch_ghostty(slots)
+        launch_ghostty(slots, ghostty_size)
     elif chosen == "ghostty-splits":
-        launch_ghostty_splits(slots)
+        launch_ghostty_splits(slots, ghostty_size)
     elif chosen == "print":
         print_launch_hints(slots)
     else:
@@ -336,16 +337,17 @@ def launch_iterm(slots: list[AgentSlot]) -> None:
     run(["osascript", "-e", "\n".join(script_lines)])
 
 
-def launch_ghostty(slots: list[AgentSlot]) -> None:
+def launch_ghostty(slots: list[AgentSlot], size: str | None = None) -> None:
     """Open Ghostty windows and run each agent command."""
 
     if not shutil.which("open"):
         raise SystemExit("Ghostty launching is only supported on systems with `open`.")
+    size_args = ghostty_size_args(size)
     for slot in slots:
-        run(["open", "-na", "Ghostty", "--args", "-e", "zsh", "-lc", shell_join_cd_command(slot)])
+        run(["open", "-na", "Ghostty", "--args", *size_args, "-e", "zsh", "-lc", shell_join_cd_command(slot)])
 
 
-def launch_ghostty_splits(slots: list[AgentSlot]) -> None:
+def launch_ghostty_splits(slots: list[AgentSlot], size: str | None = None) -> None:
     """Open one Ghostty window and arrange agents in native split panes.
 
     Ghostty documents ``new_split`` as a keybinding action and enables the
@@ -362,13 +364,30 @@ def launch_ghostty_splits(slots: list[AgentSlot]) -> None:
         raise SystemExit("Ghostty split launching is only supported on macOS with `open`.")
 
     first, *rest = slots
-    run(["open", "-na", "Ghostty", "--args", "-e", "zsh", "-lc", shell_join_cd_command(first)])
+    run(["open", "-na", "Ghostty", "--args", *ghostty_size_args(size), "-e", "zsh", "-lc", shell_join_cd_command(first)])
     if not rest:
         return
 
     time.sleep(1.2)
     for index, slot in enumerate(rest, start=2):
         run_ghostty_split_applescript(split_script(index, shell_join_cd_command(slot)))
+
+
+def ghostty_size_args(size: str | None) -> list[str]:
+    """Return Ghostty CLI size args from a ``COLSxROWS`` value."""
+
+    if not size:
+        return []
+    normalized = size.lower().replace("×", "x")
+    try:
+        columns_text, rows_text = normalized.split("x", 1)
+        columns = int(columns_text)
+        rows = int(rows_text)
+    except ValueError as exc:
+        raise SystemExit("--ghostty-size must look like COLSxROWS, for example 180x50.") from exc
+    if columns <= 0 or rows <= 0:
+        raise SystemExit("--ghostty-size columns and rows must be positive integers.")
+    return [f"--window-width={columns}", f"--window-height={rows}"]
 
 
 def split_script(index: int, command: str) -> str:
