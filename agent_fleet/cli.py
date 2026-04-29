@@ -59,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
             args.session,
             args.no_attach,
             tmux_layout=args.tmux_layout,
+            ghostty_size=args.ghostty_size,
         )
         return 0
 
@@ -135,6 +136,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="For tmux, show agents as tiled panes or separate windows.",
     )
     launch.add_argument(
+        "--ghostty-size",
+        metavar="COLSxROWS",
+        default=None,
+        help="Initial Ghostty window size, e.g. 180x50. Applies to ghostty and ghostty-splits.",
+    )
+    launch.add_argument(
         "--session",
         default=None,
         help="tmux session name. Defaults to agentfleet-<project_name>.",
@@ -194,7 +201,7 @@ Start here:
   agentfleet init
   agentfleet doctor
   agentfleet setup
-  agentfleet launch --terminal ghostty-splits
+  agentfleet launch --terminal ghostty-splits --ghostty-size 180x50
   agentfleet preview
 
 Launch terminals:
@@ -203,6 +210,9 @@ Launch terminals:
   --terminal tmux             tmux session, panes by default
   --terminal iterm            iTerm windows/tabs
   --terminal print            print commands only
+
+Ghostty sizing:
+  --ghostty-size 180x50       set initial columns x rows for Ghostty windows
 
 Other useful commands:
   agentfleet status
