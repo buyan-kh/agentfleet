@@ -262,7 +262,7 @@ def print_onboarding() -> None:
     # Inner width between double-line box characters (must match every row).
     inner_w = 62
 
-    # Nudge mast/hull/waves slightly left vs strict center (title stays centered).
+    # Extra leading-space trim for mast/hull art only (waves use the same bias).
     _ship_bias_left = 2
 
     def _center_plain(raw: str, *, shift_left: int = 0) -> str:

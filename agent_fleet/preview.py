@@ -9,7 +9,6 @@ import os
 import shlex
 import shutil
 import signal
-import shutil
 import socket
 import subprocess
 import threading
@@ -22,16 +21,24 @@ from .handoff_prompt import INIT_AI_AGENT_PROMPT, print_prompt_box
 from .models import AgentSlot, FleetConfig, PreviewConfig, PreviewServiceConfig, PreviewSlot, RuntimePreviewService
 
 STATE_FILE = "preview-processes.json"
-ROUTES = [
+
+# Paths offered in datalist + route quick-picker (ordering is UX preference).
+ALL_ROUTE_SUGGESTIONS = [
     "/",
+    "/dashboard",
+    "/login",
+    "/admin",
+    "/settings",
     "/health",
     "/docs",
     "/api/health",
-    "/login",
-    "/dashboard",
-    "/admin",
-    "/settings",
 ]
+
+# First-row chips target the SPA preview iframe (`ui_url`): product surfaces only.
+PREVIEW_ROUTE_CHIPS = ["/dashboard", "/login", "/admin", "/settings"]
+
+# Second row opens backend origin (`api_url`): OpenAPI/OpenAPI-health style probes only.
+BACKEND_ROUTE_CHIPS = ["/", "/health", "/docs", "/api/health"]
 
 # Skip heavy or irrelevant dirs when scanning one level for nested ``.venv``/``venv``.
 PREVIEW_CHILD_SCAN_SKIP = frozenset(
@@ -480,11 +487,68 @@ def split_command(command: str) -> list[str]:
     return shlex.split(command)
 
 
+def _ensure_dashboard_log_symlink(dashboard_dir: Path, log_dir: Path) -> None:
+    """Expose ``state_root/logs`` as ``/log_files/…`` URLs for the static file server."""
+
+    link = dashboard_dir / "log_files"
+    try:
+        if link.is_symlink() or link.is_file():
+            link.unlink()
+        elif link.exists() and not link.is_symlink():
+            return
+    except OSError:
+        return
+    if link.exists():
+        return
+    try:
+        rel = os.path.relpath(log_dir.resolve(), dashboard_dir.resolve())
+        link.symlink_to(rel, target_is_directory=True)
+    except OSError:
+        # Windows without dev mode symlink privilege, etc.
+        pass
+
+
+def _render_logs_page_body(payload: dict[str, object]) -> str:
+    """HTML for ``/logs/``: anchored groups with links into ``/log_files/<basename>.log``."""
+
+    previews = payload.get("previews") or []
+    chunks: list[str] = []
+    for entry in previews:
+        if not isinstance(entry, dict):
+            continue
+        label = entry.get("label") or ""
+        slot = entry.get("slot") or 0
+        anchor = f"log-slot-{slot}"
+        chunks.append(f'<section class="log-group" id="{html.escape(anchor)}">')
+        chunks.append(f'<h3 class="panel-title">{html.escape(str(label))}</h3>')
+        chunks.append('<ul class="log-link-list">')
+        for svc in entry.get("services") or []:
+            if not isinstance(svc, dict):
+                continue
+            name = html.escape(str(svc.get("name") or "service"))
+            log_path = str(svc.get("log") or "")
+            basename = Path(log_path).name
+            if not basename:
+                chunks.append(f"<li><span>No log path for {name}</span></li>")
+                continue
+            href = f"/log_files/{html.escape(basename)}"
+            chunks.append(
+                f'<li><a class="pill" href="{href}" target="_blank" rel="noreferrer">Open {name} log</a></li>'
+            )
+        chunks.append("</ul></section>")
+    if not chunks:
+        chunks.append('<p class="page-copy">No preview services yet.</p>')
+    return "\n".join(chunks)
+
+
 def write_dashboard(cfg: FleetConfig, previews: list[PreviewSlot]) -> Path:
     """Write the recovered multi-page preview fleet dashboard."""
 
     dashboard_dir = cfg.resolved_state_root() / "dashboard"
     dashboard_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = cfg.resolved_state_root() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_dashboard_log_symlink(dashboard_dir, log_dir)
     ensure_recovered_assets(dashboard_dir)
     payload = preview_payload(cfg, previews)
     dashboard_path = dashboard_dir / "index.html"
@@ -493,8 +557,8 @@ def write_dashboard(cfg: FleetConfig, previews: list[PreviewSlot]) -> Path:
     return dashboard_path
 
 
-def render_card(preview: PreviewSlot) -> str:
-    """Render one recovered preview review card."""
+def render_card(preview: PreviewSlot, slot_index: int) -> str:
+    """Render one recovered preview card."""
 
     slot = preview.slot
     service_links = "".join(
@@ -502,29 +566,41 @@ def render_card(preview: PreviewSlot) -> str:
         f'{html.escape(service.name)}:{service.port}</a>'
         for service in preview.services
     )
-    service_rows = "".join(
-        f'<div class="label">{html.escape(service.name)}</div><code>{html.escape(str(service.log))}</code>'
-        for service in preview.services
-    )
+    dl_id = f"route-dl-{slot_index}"
+    log_anchor = f"/logs/#log-slot-{slot_index}"
+    quick = route_quick_select_html(ALL_ROUTE_SUGGESTIONS)
+    dl = route_datalist_html(dl_id, ALL_ROUTE_SUGGESTIONS)
+    prev_chips = route_chips_html(PREVIEW_ROUTE_CHIPS)
+    api_chips = api_route_chips_html(preview, BACKEND_ROUTE_CHIPS)
     return f"""<article class="card" id="{html.escape(slot.label)}" data-preview-card data-preview-label="{html.escape(slot.label)}">
   <div class="meta">
     <div class="title">
       <strong>{html.escape(slot.label)}</strong>
       <div class="agent-links">
         <a class="pill accent" data-open-link href="{preview.ui_url}" target="_blank" rel="noreferrer">open preview</a>
+        <a class="pill" href="{html.escape(log_anchor)}">logs</a>
         {service_links}
       </div>
     </div>
     <div class="route-control">
       <div class="route-row">
-        <div class="label">Endpoint</div>
-        <input class="route-input" data-route-input list="route-recommendations" value="/" placeholder="/dashboard" aria-label="{html.escape(slot.label)} endpoint">
+        <div class="label">Preview path</div>
+        <div class="route-input-wrap">{quick}<input class="route-input" data-route-input list="{html.escape(dl_id)}" value="/" placeholder="/dashboard" autocomplete="off" spellcheck="false" aria-label="{html.escape(slot.label)} preview path"></div>
         <button class="mini-btn primary" data-apply-route type="button">Apply</button>
         <button class="mini-btn" data-reset-route type="button">Reset</button>
       </div>
-      <div class="route-chips">{route_chips(ROUTES[:4])}</div>
-      <div class="current-url" data-current-url>{preview.ui_url}</div>
+      <div class="route-sub">
+        <div class="label">Preview</div>
+        <div class="route-chips">{prev_chips}</div>
+      </div>
+      <div class="route-sub">
+        <div class="label">Backend API</div>
+        <div class="route-chips">{api_chips}</div>
+      </div>
+      <div class="current-url mono-trace" data-current-url>{preview.ui_url}</div>
+      {dl}
     </div>
+    <!-- Review UI disabled: use Tickets page when re-enabled.
     <div class="review-row">
       <div class="label">Review</div>
       <select class="status-select" data-status aria-label="{html.escape(slot.label)} status">
@@ -535,10 +611,10 @@ def render_card(preview: PreviewSlot) -> str:
       </select>
       <input class="notes-input" data-notes placeholder="note / ticket / what to check" aria-label="{html.escape(slot.label)} notes">
     </div>
+    -->
     <div class="meta-grid">
       <div class="label">Branch</div><code>{html.escape(slot.branch)}</code>
       <div class="label">Worktree</div><code>{html.escape(str(slot.path))}</code>
-      {service_rows}
     </div>
   </div>
   <iframe src="{preview.ui_url}" loading="lazy"></iframe>
@@ -550,7 +626,7 @@ def preview_payload(cfg: FleetConfig, previews: list[PreviewSlot]) -> dict[str, 
 
     return {
         "dashboardPort": cfg.preview.dashboard_port,
-        "routes": ROUTES,
+        "routes": ALL_ROUTE_SUGGESTIONS,
         "previews": [
             {
                 "slot": index,
@@ -584,12 +660,12 @@ def render_preview_page(
 ) -> str:
     """Render the recovered Agent Previews page."""
 
-    cards = "\n".join(render_card(preview) for preview in previews)
+    cards = "\n".join(render_card(preview, i) for i, preview in enumerate(previews, start=1))
     content = f"""
           <div class="page-head">
             <div>
               <h2 class="page-title">Agent Previews</h2>
-              <p class="page-copy">Review each worktree on its own localhost port. Tickets, exports, commands, and settings live on their own pages.</p>
+              <p class="page-copy">Open each worktree on its own localhost port. Service logs live on <a href="/logs/">Logs</a>. Commands and settings have their own pages.</p>
             </div>
             <div class="grid-controls" data-grid-controls>
               <button class="side-btn" data-grid-mode="auto" type="button">Auto grid</button>
@@ -600,7 +676,6 @@ def render_preview_page(
             </div>
           </div>
           <div class="preview-grid" data-preview-grid>{cards}</div>
-          <datalist id="route-recommendations"></datalist>
 """
     return render_shell(cfg, "previews", "Agent Previews", content, payload)
 
@@ -613,16 +688,15 @@ def write_secondary_pages(cfg: FleetConfig, dashboard_dir: Path, payload: dict[s
         if stale_dir.exists():
             shutil.rmtree(stale_dir)
 
+    # Review-focused pages — re-enable when the review UI ships again:
+    # "tickets": ("Tickets & Reviews", '<div class="review-board" data-review-board></div>', "..."),
+    # "exports": ("Linear Export", '<div class="section-card">...</div>', "..."),
+
     pages = {
-        "tickets": (
-            "Tickets & Reviews",
-            '<div class="review-board" data-review-board></div>',
-            "Approve, block, and annotate agent work from one place.",
-        ),
-        "exports": (
-            "Linear Export",
-            '<div class="section-card"><div class="panel-title">Export review packet</div><p class="small-copy">Copy/paste this packet into Linear, GitHub, or a release note.</p><textarea class="export-box" data-export-box spellcheck="false"></textarea><div class="button-row"><button class="side-btn primary" data-refresh-export type="button">Refresh export</button><button class="side-btn" data-copy-export type="button">Copy</button></div></div>',
-            "Turn local review state into a portable handoff.",
+        "logs": (
+            "Service logs",
+            _render_logs_page_body(payload),
+            "Stdout/stderr for each preview service opens as raw ``.log`` files (same files on disk under your state ``logs`` directory).",
         ),
         "commands": (
             "Fleet Commands",
@@ -694,8 +768,9 @@ def render_sidebar(active_page: str) -> str:
 
     nav = [
         ("previews", "/", "Agent Previews"),
-        ("tickets", "/tickets/", "Tickets & Reviews"),
-        ("exports", "/exports/", "Linear Export"),
+        ("logs", "/logs/", "Logs"),
+        # ("tickets", "/tickets/", "Tickets & Reviews"),
+        # ("exports", "/exports/", "Linear Export"),
         ("commands", "/commands/", "Fleet Commands"),
         ("settings", "/settings/", "Settings"),
     ]
@@ -708,11 +783,13 @@ def render_sidebar(active_page: str) -> str:
     <div class="brand-kicker">AgentFleet</div>
     <h1>Preview Fleet</h1>
   </div>
-  <p class="sidebar-copy">Local-only review for multi-agent worktrees across any project stack.</p>
+  <p class="sidebar-copy">Local-only multi-agent worktrees across any project stack.</p>
   <div class="nav-list">{links}</div>
   <div class="stat-grid">
     <div class="stat"><div class="stat-label">Agents</div><div class="stat-value" data-count-total>0</div></div>
+    <!-- Review stat disabled with review UI:
     <div class="stat"><div class="stat-label">Approved</div><div class="stat-value" data-count-approved>0</div></div>
+    -->
   </div>
   <div class="legend">
     <div class="legend-row"><span class="dot"></span><span>Services run on configured localhost ports.</span></div>
@@ -721,13 +798,48 @@ def render_sidebar(active_page: str) -> str:
 </aside>"""
 
 
-def route_chips(routes: list[str]) -> str:
-    """Render endpoint chips used by preview cards."""
+def route_chips_html(routes: list[str]) -> str:
+    """Render clickable chips for SPA preview iframe routes (same origin as iframe)."""
 
     return "".join(
         f'<button class="route-chip" data-route-chip="{html.escape(route)}" type="button">{html.escape(route)}</button>'
         for route in routes
     )
+
+
+def route_datalist_html(list_id: str, routes: list[str]) -> str:
+    """Return a ``<datalist>`` for ``<input list=…>`` (server-rendered avoids JS timing flakes)."""
+
+    opts = "".join(f'<option value="{html.escape(r)}"></option>' for r in routes)
+    return f'<datalist id="{html.escape(list_id)}">{opts}</datalist>'
+
+
+def route_quick_select_html(routes: list[str]) -> str:
+    """Shallow picker; datalists rarely open suggestions on focus alone."""
+
+    opts = '<option value="">Paths…</option>'
+    opts += "".join(f'<option value="{html.escape(r)}">{html.escape(r)}</option>' for r in routes)
+    return (
+        f'<select class="route-quick" data-route-quick aria-label="Suggested path">{opts}</select>'
+    )
+
+
+def api_route_chips_html(preview: PreviewSlot, routes_list: list[str]) -> str:
+    """Chip row that opens backend origin URLs in a new tab (does not steer the iframe)."""
+
+    base = preview.api_url.rstrip("/")
+    return "".join(
+        f'<button type="button" class="route-chip route-chip-api" data-api-route-chip '
+        f'data-api-base="{html.escape(base)}" data-api-route="{html.escape(route)}">'
+        f"{html.escape(route)}</button>"
+        for route in routes_list
+    )
+
+
+def route_chips(routes: list[str]) -> str:
+    """Render endpoint chips used by preview cards."""
+
+    return route_chips_html(routes)
 
 
 def ensure_recovered_assets(dashboard_dir: Path) -> None:
@@ -740,24 +852,198 @@ def ensure_recovered_assets(dashboard_dir: Path) -> None:
 
 
 FALLBACK_DASHBOARD_CSS = """
-:root { --surface: #fff; --surface-2:#faf9f6; --ink: #161614; --accent: #5b8a72; --accent-ink:#3d6650; --accent-soft:#e8efe9; --line: rgba(22,22,20,.1); }
-* { box-sizing: border-box; } body { margin:0; min-height:100vh; font-family: Inter, ui-sans-serif, system-ui, sans-serif; color:var(--ink); background:linear-gradient(160deg,#2a3a5c,#c89a78); }
-.shell { min-height:100vh; padding:14px; display:grid; grid-template-columns:236px minmax(0,1fr); gap:14px; }
-aside,.main-panel,.card,.section-card { background:rgba(255,255,255,.9); border:1px solid var(--line); border-radius:16px; box-shadow:0 24px 80px rgba(0,0,0,.18); }
-aside { padding:18px; } h1 { font-family:Georgia,serif; font-size:34px; line-height:.96; margin:0 0 12px; }
-.nav-list,.button-row,.route-chips,.agent-links,.review-row,.route-row { display:flex; gap:8px; flex-wrap:wrap; }
-.nav-btn,.pill,.side-btn,.mini-btn,.route-chip { border:1px solid var(--line); border-radius:999px; padding:7px 10px; background:#fff; color:var(--accent); text-decoration:none; font-weight:700; }
-.is-active,.accent,.primary { background:var(--accent-soft); color:var(--accent-ink); }
-.stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:18px 0; }
-.stat,.meta-grid code,input,select,textarea { background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:9px; }
-header { display:flex; justify-content:space-between; padding:16px; border-bottom:1px solid var(--line); }
-main { padding:16px; } .page-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; margin-bottom:14px; }
-.preview-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(520px,1fr)); gap:14px; }
-.card { overflow:hidden; } .card .meta { padding:14px; display:grid; gap:10px; }
-.title { display:flex; justify-content:space-between; gap:10px; }
-.meta-grid { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:7px; align-items:center; }
-iframe { width:100%; height:420px; border:0; background:#fff; }
-.label,.stat-label,.brand-kicker { color:#777; font-size:10px; text-transform:uppercase; letter-spacing:.12em; font-weight:800; }
+:root {
+  --surface: #faf9f6;
+  --surface-2: #ffffff;
+  --ink: #161614;
+  --ink-3: #7a7a75;
+  --accent: #5b8a72;
+  --accent-ink: #3d6650;
+  --accent-soft: #e8efe9;
+  --line: rgba(22,22,20,.09);
+  --line-strong: rgba(22,22,20,.14);
+  --shadow-card: 0 1px 0 rgba(20,20,20,0.03), 0 8px 28px -14px rgba(20,20,20,0.12);
+  --shadow-shell: 0 16px 56px -20px rgba(12,18,14,0.35);
+  --radius-lg: 14px;
+}
+* { box-sizing: border-box; }
+html { height: 100%; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  color: var(--ink);
+  background: #1a1e24;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+/* Cadence / Lumen lineage: painterly wash with sage + paper (see design_guideline/cadence). */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(160deg, #4a7a5a 0%, #6b9a72 22%, #c4b896 52%, #a88060 78%, #3d2f1f 100%);
+  opacity: 1;
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 70% 55% at 25% 35%, rgba(120,160,140,0.45), transparent 58%),
+    radial-gradient(ellipse 60% 48% at 78% 72%, rgba(200,160,120,0.4), transparent 55%),
+    radial-gradient(ellipse 50% 42% at 50% 92%, rgba(40,30,20,0.28), transparent 60%);
+  mix-blend-mode: soft-light;
+}
+.shell { position: relative; z-index: 1; min-height: 100vh; padding: 16px; display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 14px; }
+aside, .main-panel, .card, .section-card {
+  background: rgba(255,255,255,.92);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-shell);
+}
+aside { padding: 20px 18px; }
+aside h1 {
+  font-family: Georgia, 'Iowan Old Style', 'Apple Garamond', serif;
+  font-size: 32px;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+}
+.brand-kicker { color: var(--accent); font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em; font-weight: 800; }
+.sidebar-copy { margin: 0 0 14px; color: var(--ink-3); font-size: 12px; line-height: 1.5; }
+.nav-list { display: flex; flex-direction: column; gap: 4px; }
+aside .nav-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 650;
+  font-size: 13px;
+  text-decoration: none;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+aside .nav-btn:hover { background: rgba(91,138,114,0.08); color: var(--accent-ink); }
+aside .nav-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border-color: rgba(91,138,114,0.28);
+}
+.stat-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 18px 0; }
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.stat-value { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 750; color: var(--accent-ink); }
+.stat-label { color: var(--ink-3); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 800; }
+.legend { margin-top: 8px; font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+.legend-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; background: var(--accent); }
+.dot.warn { background: #c89a4a; }
+.button-row, .agent-links, .review-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pill, .side-btn, .mini-btn, .route-chip {
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: var(--surface-2);
+  color: var(--accent-ink);
+  text-decoration: none;
+  font-weight: 650;
+  font-size: 12.5px;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.65) inset;
+}
+.is-active, .accent, .primary { background: var(--accent-soft); color: var(--accent-ink); border-color: rgba(61,102,80,0.25); }
+.mini-btn.primary { font-weight: 700; }
+.stat, .meta-grid code, input, select, textarea {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255,255,255,0.65);
+}
+header .top-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.crumbs { font-size: 12px; color: var(--ink-3); }
+.crumbs strong { color: var(--ink); font-weight: 700; }
+main { padding: 16px 18px 20px; }
+.page-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; margin-bottom: 14px; flex-wrap: wrap; }
+.page-title { font-family: Georgia, serif; font-size: 30px; margin: 0 0 6px; letter-spacing: -0.02em; }
+.page-copy { margin: 0; max-width: 720px; font-size: 13.5px; color: var(--ink-3); line-height: 1.55; }
+.page-copy a { color: var(--accent-ink); font-weight: 650; }
+.preview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 14px; }
+.card { overflow: hidden; border-radius: var(--radius-lg); box-shadow: var(--shadow-card); }
+.card .meta { padding: 16px; display: grid; gap: 11px; background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(250,249,246,0.95)); }
+.title { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.title strong { font-size: 17px; letter-spacing: -0.02em; }
+.route-control { display: flex; flex-direction: column; gap: 10px; }
+.route-row {
+  display: grid;
+  grid-template-columns: 96px minmax(140px, 1fr) auto auto;
+  gap: 8px 10px;
+  align-items: center;
+}
+.route-input-wrap { flex: 1 1 200px; display: flex; gap: 8px; align-items: stretch; min-width: 0; }
+.route-quick {
+  flex: 0 0 auto;
+  width: 132px;
+  max-width: 40%;
+  padding: 9px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.route-input { flex: 1 1 160px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12.5px; }
+.route-input:focus-visible, .route-quick:focus-visible { outline: 2px solid rgba(91,138,114,0.45); outline-offset: 1px; }
+.route-sub { display: grid; grid-template-columns: 88px 1fr; gap: 10px; align-items: start; }
+.route-sub .label { padding-top: 3px; }
+.route-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.route-chip { font-size: 12px; padding: 6px 11px; border-radius: 999px; box-shadow: none; }
+.route-chip-api { background: #f3f6f4; border-color: rgba(61,102,80,0.2); color: #2d4a3a; }
+.current-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  word-break: break-all;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: #3d3d38;
+}
+.mono-trace { line-height: 1.4; }
+.meta-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 14px; align-items: center; }
+.meta-grid code { font-size: 11.5px; }
+iframe { width: 100%; height: 420px; border: 0; background: #fff; }
+.label, .brand-kicker {
+  color: var(--ink-3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 800;
+}
+.section-card { padding: 16px; margin-bottom: 14px; }
+.command-list { margin-bottom: 14px; }
 """
 
 
@@ -769,36 +1055,59 @@ FALLBACK_DASHBOARD_JS = """
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const key = (name, label) => `preview-${name}:${label}`;
+  const escapeAttr = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   const norm = (route) => { const r = String(route || "/").trim(); return !r || r === "/" ? "/" : r.startsWith("/") || /^https?:/.test(r) ? r : `/${r}`; };
   const url = (base, route) => /^https?:/.test(route) ? route : `${base}${route === "/" ? "" : route}`;
   const find = (label) => previews.find((p) => p.label === label);
-  const syncStats = () => { const total = $("[data-count-total]"); if (total) total.textContent = previews.length; const approved = previews.filter((p) => localStorage.getItem(key("status", p.label)) === "approved").length; const node = $("[data-count-approved]"); if (node) node.textContent = approved; };
+  const syncStats = () => { const total = $("[data-count-total]"); if (total) total.textContent = previews.length; };
   const syncCard = (card) => { const p = find(card.dataset.previewLabel); if (!p) return; const route = norm(localStorage.getItem(key("route", p.label)) || "/"); const next = url(p.uiUrl, route); const frame = $("iframe", card); const link = $("[data-open-link]", card); const current = $("[data-current-url]", card); if (frame) frame.src = next; if (link) link.href = next; if (current) current.textContent = next; };
   $$("[data-preview-card]").forEach((card) => {
     const label = card.dataset.previewLabel;
     const input = $("[data-route-input]", card);
-    const status = $("[data-status]", card);
-    const notes = $("[data-notes]", card);
+    const quick = $("[data-route-quick]", card);
+    // Review dashboard (status/notes) commented out — restore when Tickets UI returns.
     if (input) input.value = localStorage.getItem(key("route", label)) || "/";
-    if (status) status.value = localStorage.getItem(key("status", label)) || "reviewing";
-    if (notes) notes.value = localStorage.getItem(key("notes", label)) || "";
+    if (quick) {
+      quick.addEventListener("change", () => {
+        const v = quick.value;
+        if (!v || !input) return;
+        input.value = v;
+        localStorage.setItem(key("route", label), norm(v));
+        syncCard(card);
+        quick.selectedIndex = 0;
+      });
+    }
     card.addEventListener("click", (event) => {
+      const apiChip = event.target.closest("[data-api-route-chip]");
+      if (apiChip) {
+        let base = String(apiChip.dataset.apiBase || "").trim();
+        while (base.endsWith("/")) base = base.slice(0, -1);
+        let path = String(apiChip.dataset.apiRoute || "/");
+        if (!path.startsWith("/")) path = `/${path}`;
+        window.open(base + path, "_blank", "noopener,noreferrer");
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const chip = event.target.closest("[data-route-chip]");
       if (chip && input) { input.value = chip.dataset.routeChip; localStorage.setItem(key("route", label), norm(input.value)); syncCard(card); }
       if (event.target.matches("[data-apply-route]") && input) { localStorage.setItem(key("route", label), norm(input.value)); syncCard(card); }
       if (event.target.matches("[data-reset-route]") && input) { input.value = "/"; localStorage.setItem(key("route", label), "/"); syncCard(card); }
     });
-    if (status) status.addEventListener("change", () => { localStorage.setItem(key("status", label), status.value); syncStats(); });
-    if (notes) notes.addEventListener("input", () => localStorage.setItem(key("notes", label), notes.value));
     syncCard(card);
   });
-  const list = $("#route-recommendations"); if (list) list.innerHTML = routes.map((r) => `<option value="${r}"></option>`).join("");
+  const list = $("#route-recommendations");
+  if (list) list.innerHTML = routes.map((r) => `<option value="${escapeAttr(r)}"></option>`).join("");
   syncStats();
 })();
 """
 
 
 EXTRA_DASHBOARD_CSS = """
+
+.log-link-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.log-group { margin-bottom: 20px; }
+body[data-page="logs"] .log-group:last-child { margin-bottom: 0; }
 
 body[data-page="previews"] main { padding: 12px; }
 body[data-page="previews"] .page { width: 100%; max-width: none; margin: 0; }
@@ -876,12 +1185,12 @@ def print_summary(cfg: FleetConfig, previews: list[PreviewSlot]) -> None:
 
     dashboard_url = f"http://localhost:{cfg.preview.dashboard_port}"
     print(f"\nDashboard -> {dashboard_url}")
+    print(f"  Logs page -> {dashboard_url}/logs/")
     for preview in previews:
         service_summary = " | ".join(f"{service.name}: {service.url}" for service in preview.services)
         print(f"  {preview.slot.label}: {preview.ui_url}")
         if service_summary:
             print(f"    services: {service_summary}")
-        print(f"    logs: {', '.join(str(service.log) for service in preview.services)}")
     webbrowser.open(dashboard_url)
     print("\nPress Ctrl+C to stop previews.")
 
@@ -906,11 +1215,11 @@ def wait_forever(
                             "If the command is ``npm run ...`` but the log shows ``next``/``vite``: command not found, "
                             "Node deps are missing in that **worktree's** service directory — run ``npm install`` there, "
                             "or set ``install_command`` + ``install_if_missing`` on that ``[[preview.services]]`` block. "
-                            "Read the *.log paths printed above for the exact line."
+                            "See the Logs page or state ``logs/*.log`` for the exact line."
                         )
                     elif rc not in (0, None):
                         hint = (
-                            "\nStderr was merged into the service *.log paths printed above "
+                            "\nStderr was merged into the service *.log files (Logs page / state logs dir). "
                             "(often missing deps or wrong interpreter: fix your env, "
                             "or set ``preview.path_prepend`` in agentfleet.toml to the ``bin`` directory you use locally)."
                         )
@@ -998,7 +1307,6 @@ def print_saved_preview_state(cfg: FleetConfig) -> None:
                 "    services: "
                 + " | ".join(f"{service.get('name')}: {service.get('url')}" for service in services)
             )
-            print("    logs: " + ", ".join(str(service.get("log")) for service in services))
 
 
 def stop_process(pid: int) -> None:
