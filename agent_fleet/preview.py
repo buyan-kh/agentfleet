@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import html
 import http.server
 import json
@@ -32,6 +34,19 @@ ROUTES = [
 ]
 
 
+@dataclass(frozen=True)
+class PreviewProcess:
+    """Track a preview subprocess with enough context to debug early exits."""
+
+    proc: subprocess.Popen[str]
+    label: str
+    service: str
+    command: str
+    argv: list[str]
+    cwd: Path
+    log: Path
+
+
 def start_preview(cfg: FleetConfig, slots: list[AgentSlot], install_deps: bool = True) -> int:
     """Start configured preview services and serve the dashboard until interrupted."""
 
@@ -54,7 +69,7 @@ def start_preview(cfg: FleetConfig, slots: list[AgentSlot], install_deps: bool =
     state_root = cfg.resolved_state_root()
     state_root.mkdir(parents=True, exist_ok=True)
 
-    processes: list[subprocess.Popen[str]] = []
+    processes: list[PreviewProcess] = []
     try:
         for preview in preview_slots:
             processes.extend(start_preview_processes(cfg, preview, install_deps))
@@ -64,8 +79,8 @@ def start_preview(cfg: FleetConfig, slots: list[AgentSlot], install_deps: bool =
         print_summary(cfg, preview_slots)
         wait_forever(processes, server)
     finally:
-        for proc in processes:
-            stop_process(proc.pid)
+        for tracked in processes:
+            stop_process(tracked.proc.pid)
         clear_state(cfg)
     return 0
 
@@ -212,10 +227,10 @@ def port_is_free(port: int) -> bool:
 
 def start_preview_processes(
     cfg: FleetConfig, preview: PreviewSlot, install_deps: bool
-) -> list[subprocess.Popen[str]]:
+) -> list[PreviewProcess]:
     """Start the configured service commands for one preview slot."""
 
-    processes: list[subprocess.Popen[str]] = []
+    processes: list[PreviewProcess] = []
     for service in preview.services:
         service.log.parent.mkdir(parents=True, exist_ok=True)
         if install_deps and service.install_if_missing and service.install_command:
@@ -229,15 +244,26 @@ def start_preview_processes(
         for key, value in service.env.items():
             env[key] = render_service_template(value, preview, service)
 
+        rendered = render_service_template(service.command, preview, service)
+        argv = split_command(rendered)
         log_handle = service.log.open("w", encoding="utf-8")
+        proc = subprocess.Popen(
+            argv,
+            cwd=service.directory,
+            env=env,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
         processes.append(
-            subprocess.Popen(
-                split_command(render_service_template(service.command, preview, service)),
+            PreviewProcess(
+                proc=proc,
+                label=preview.slot.label,
+                service=service.name,
+                command=rendered,
+                argv=argv,
                 cwd=service.directory,
-                env=env,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                text=True,
+                log=service.log,
             )
         )
     return processes
@@ -816,15 +842,34 @@ def print_summary(cfg: FleetConfig, previews: list[PreviewSlot]) -> None:
 
 
 def wait_forever(
-    processes: list[subprocess.Popen[str]], server: http.server.ThreadingHTTPServer
+    processes: list[PreviewProcess], server: http.server.ThreadingHTTPServer
 ) -> None:
     """Wait until interrupted or a child preview exits."""
 
     try:
         while True:
-            for proc in processes:
+            for tracked in processes:
+                proc = tracked.proc
                 if proc.poll() is not None:
-                    raise SystemExit(f"Preview process exited early with code {proc.returncode}.")
+                    hint = ""
+                    if proc.returncode == 127:
+                        exe = tracked.argv[0] if tracked.argv else "(empty command)"
+                        hint = (
+                            "\nExit code 127 usually means the executable was not found on PATH.\n"
+                            f"argv0: {exe}\n"
+                            "Fix: install the tool, use an absolute path, or ensure your terminal PATH is visible to GUI apps."
+                        )
+                    raise SystemExit(
+                        "Preview process exited early:\n"
+                        f"  slot: {tracked.label}\n"
+                        f"  service: {tracked.service}\n"
+                        f"  cwd: {tracked.cwd}\n"
+                        f"  command: {tracked.command}\n"
+                        f"  argv: {tracked.argv}\n"
+                        f"  log: {tracked.log}\n"
+                        f"exit code: {proc.returncode}"
+                        f"{hint}"
+                    )
             time.sleep(1)
     except KeyboardInterrupt:
         print("\nStopping preview fleet...")
@@ -832,12 +877,12 @@ def wait_forever(
         server.shutdown()
 
 
-def write_state(cfg: FleetConfig, previews: list[PreviewSlot], processes: list[subprocess.Popen[str]]) -> None:
+def write_state(cfg: FleetConfig, previews: list[PreviewSlot], processes: list[PreviewProcess]) -> None:
     """Persist enough process state for ``status`` and ``stop``."""
 
     state = {
         "dashboard_port": cfg.preview.dashboard_port,
-        "processes": [proc.pid for proc in processes],
+        "processes": [tracked.proc.pid for tracked in processes],
         "previews": [
             {
                 "label": preview.slot.label,
