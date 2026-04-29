@@ -25,6 +25,10 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command is None:
+        print_onboarding()
+        return 0
+
     repo_root = find_repo_root()
 
     if args.command == "init":
@@ -101,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
 
     parser = argparse.ArgumentParser(prog="agentfleet", description="Manage local worktree agent fleets.")
-    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands = parser.add_subparsers(dest="command")
 
     init = subcommands.add_parser("init", help="Write a starter agentfleet.toml.")
     init.add_argument("--force", action="store_true", help="Overwrite an existing config.")
@@ -177,6 +181,37 @@ def add_skip_doctor(parser: argparse.ArgumentParser) -> None:
     """Add the common doctor bypass flag."""
 
     parser.add_argument("--skip-doctor", action="store_true", help="Skip preflight checks.")
+
+
+def print_onboarding() -> None:
+    """Print a compact orientation screen for first-time CLI usage."""
+
+    print(
+        """AgentFleet
+Run coding agents in isolated git worktrees.
+
+Start here:
+  agentfleet init
+  agentfleet doctor
+  agentfleet setup
+  agentfleet launch --terminal ghostty-splits
+  agentfleet preview
+
+Launch terminals:
+  --terminal ghostty-splits   one Ghostty window with native split panes
+  --terminal ghostty          separate Ghostty windows
+  --terminal tmux             tmux session, panes by default
+  --terminal iterm            iTerm windows/tabs
+  --terminal print            print commands only
+
+Other useful commands:
+  agentfleet status
+  agentfleet stop
+  agentfleet clean
+  agentfleet tasks --out agentfleet-tasks.yaml
+
+Run `agentfleet --help` or `agentfleet <command> --help` for details."""
+    )
 
 
 def selected_slots(cfg: FleetConfig, args: argparse.Namespace) -> list[AgentSlot]:
