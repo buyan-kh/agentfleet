@@ -1,0 +1,23 @@
+project_name = "AgentFleet"
+worktree_root = "/Users/buyantogtokh/Projects"
+base_ref = "origin/main"
+
+[[agents]]
+kind = "codex"
+count = 3
+command = "codex"
+branch_prefix = "codex/task"
+
+[[agents]]
+kind = "claude"
+count = 3
+command = "claude"
+branch_prefix = "claude/task"
+
+[preview]
+dashboard_port = 3999
+api_dir = ""
+ui_dir = ""
+data_dir = ""
+api_command = ""
+ui_command = ""
