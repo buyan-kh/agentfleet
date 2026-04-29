@@ -2,18 +2,6 @@
 
 One CLI manages **coding agents across isolated git worktrees**: init config, spawn terminals, preview multi-service stacks, and sanity-check tooling.
 
----
-
-## Requirements
-
-| | |
-|---|---|
-| **Runtime** | Node.js **18+**, Python **3.11+**, **Git** |
-| **Agents** | CLIs you list in config (defaults assume **Claude Code** & **Codex** on `PATH`) |
-| **Context** | Run commands **inside a git repository** |
-
----
-
 ## Install
 
 ```bash
@@ -126,5 +114,15 @@ agentfleet upgrade          # npm global → latest
 1. **`agentfleet doctor`** — single source of truth for misconfig.
 2. **Stale global install:** `npm install -g @buyan14/agentfleet@latest` or `agentfleet upgrade`.
 3. **Not in a repo:** AgentFleet resolves paths from **`git`**; run inside a checkout.
+
+---
+
+## Requirements
+
+| | |
+|---|---|
+| **Runtime** | Node.js **18+**, Python **3.11+**, **Git** |
+| **Agents** | CLIs you list in config (defaults assume **Claude Code** & **Codex** on `PATH`) |
+| **Context** | Run commands **inside a git repository** |
 
 MIT · If AgentFleet helps your workflow, a star on the repo is appreciated.
