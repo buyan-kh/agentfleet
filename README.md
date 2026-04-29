@@ -2,8 +2,6 @@
 
 Run multiple coding agents in isolated git worktrees from one CLI.
 
-GitHub: https://github.com/buyan-kh/agentfleet
-
 If AgentFleet helps your workflow, please star the project.
 
 ## Install
@@ -37,7 +35,7 @@ Configure AgentFleet for this repository.
 agentfleet init
 agentfleet doctor
 agentfleet setup
-agentfleet launch --terminal ghostty-splits
+agentfleet launch --terminal ghostty-splits --ghostty-size 180x50
 agentfleet preview
 ```
 
@@ -48,6 +46,8 @@ Terminal options:
 - `tmux`: one tmux session.
 - `iterm`: separate iTerm tabs/windows.
 - `print`: print the commands instead of launching.
+
+Use `--ghostty-size COLSxROWS`, for example `--ghostty-size 180x50`, to start a larger Ghostty workspace.
 
 ## Preview Services
 
