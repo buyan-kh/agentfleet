@@ -6,10 +6,11 @@ Open source · MIT · **[github.com/buyan-kh/agentfleet](https://github.com/buya
 
 ## Demo
 
-<video src="agentfleet2.mp4" controls playsinline muted width="720"></video>
+![AgentFleet demo preview](agentfleet-demo.gif)
 
-[Download the demo video](agentfleet2.mp4) if playback does not load in your viewer.
+<video src="https://raw.githubusercontent.com/buyan-kh/agentfleet/main/agentfleet2.mp4" controls playsinline preload="metadata" width="720"></video>
 
+[agentfleet2.mp4](agentfleet2.mp4) (H.264) · [raw](https://raw.githubusercontent.com/buyan-kh/agentfleet/main/agentfleet2.mp4)
 ## Install
 
 **Recommended (global npm):**
