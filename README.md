@@ -195,10 +195,3 @@ agentfleet stop
 agentfleet clean
 ```
 
-## Publish
-
-```bash
-cd /Users/buyantogtokh/Projects/AgentFleet
-npm publish --access public
-```
-
