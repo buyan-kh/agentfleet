@@ -5,7 +5,7 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from .models import AgentSpec, FleetConfig, PreviewConfig
+from .models import AgentSpec, FleetConfig, PreviewConfig, PreviewServiceConfig
 
 CONFIG_NAME = "agentfleet.toml"
 LEGACY_CONFIG_NAME = "agent-fleet.toml"
@@ -36,37 +36,18 @@ def config_path(repo_root: Path) -> Path:
 
 
 def default_config(repo_root: Path) -> FleetConfig:
-    """Return clone-and-run defaults that mirror the original cockpit script."""
+    """Return generic clone-and-run defaults for a repo-local agent fleet."""
 
     project_name = repo_root.name
-    has_similarity_preview = (
-        (repo_root / "the-similarity-api").is_dir()
-        and (repo_root / "the-similarity-app").is_dir()
-    )
-    preview = (
-        PreviewConfig(
-            dashboard_port=3999,
-            api_dir="the-similarity-api",
-            ui_dir="the-similarity-app",
-            data_dir="the-similarity-data",
-            api_command=(
-                "python -m uvicorn app.main:app --host 127.0.0.1 "
-                "--port {api_port} --reload"
-            ),
-            ui_command="npm run dev -- -p {ui_port}",
-        )
-        if has_similarity_preview
-        else PreviewConfig()
-    )
     return FleetConfig(
         repo_root=repo_root,
         project_name=project_name,
         worktree_root=repo_root.parent,
         agents=(
-            AgentSpec("codex", count=3, command="codex", branch_prefix="codex/task"),
-            AgentSpec("claude", count=3, command="claude", branch_prefix="claude/task"),
+            AgentSpec("codex", count=2, command="codex", branch_prefix="codex/task"),
+            AgentSpec("claude", count=2, command="claude", branch_prefix="claude/task"),
         ),
-        preview=preview,
+        preview=PreviewConfig(),
     )
 
 
@@ -141,18 +122,66 @@ def parse_preview(row: object, fallback: PreviewConfig) -> PreviewConfig:
         return fallback
     if not isinstance(row, dict):
         raise SystemExit("agentfleet.toml: preview must be a table.")
+    services = parse_preview_services(row.get("services", []))
     return PreviewConfig(
         dashboard_port=int(row.get("dashboard_port", fallback.dashboard_port)),
         api_base_port=int(row.get("api_base_port", fallback.api_base_port)),
         ui_base_port=int(row.get("ui_base_port", fallback.ui_base_port)),
-        api_dir=str(row.get("api_dir", fallback.api_dir)),
-        ui_dir=str(row.get("ui_dir", fallback.ui_dir)),
-        api_command=str(row.get("api_command", fallback.api_command)),
-        ui_command=str(row.get("ui_command", fallback.ui_command)),
-        data_dir=str(row.get("data_dir", fallback.data_dir)),
-        install_command=str(row.get("install_command", fallback.install_command)),
-        install_if_missing=str(row.get("install_if_missing", fallback.install_if_missing)),
+        api_dir=str_or_fallback(row.get("api_dir"), fallback.api_dir),
+        ui_dir=str_or_fallback(row.get("ui_dir"), fallback.ui_dir),
+        api_command=str_or_fallback(row.get("api_command"), fallback.api_command),
+        ui_command=str_or_fallback(row.get("ui_command"), fallback.ui_command),
+        ui_api_env_var=str_or_fallback(row.get("ui_api_env_var"), fallback.ui_api_env_var),
+        data_dir=str_or_fallback(row.get("data_dir"), fallback.data_dir),
+        install_command=str_or_fallback(row.get("install_command"), fallback.install_command),
+        install_if_missing=str_or_fallback(row.get("install_if_missing"), fallback.install_if_missing),
+        services=tuple(services),
     )
+
+
+def parse_preview_services(rows: object) -> list[PreviewServiceConfig]:
+    """Parse ``[[preview.services]]`` rows from TOML data."""
+
+    if rows in (None, ""):
+        return []
+    if not isinstance(rows, list):
+        raise SystemExit("agentfleet.toml: preview.services must be an array of tables.")
+
+    services: list[PreviewServiceConfig] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise SystemExit("agentfleet.toml: each preview service must be a table.")
+        name = str(row.get("name") or "").strip()
+        if not name:
+            raise SystemExit("agentfleet.toml: each preview service needs a name.")
+        command = str(row.get("command") or "").strip()
+        if not command:
+            raise SystemExit(f"agentfleet.toml: preview service {name} needs a command.")
+        env = row.get("env", {})
+        if not isinstance(env, dict):
+            raise SystemExit(f"agentfleet.toml: preview service {name} env must be a table.")
+        services.append(
+            PreviewServiceConfig(
+                name=name,
+                port_base=int(row.get("port_base", 3000 + (index - 1) * 1000)),
+                directory=str(row.get("dir") or row.get("directory") or "."),
+                command=command,
+                env={str(key): str(value) for key, value in env.items()},
+                install_command=str(row.get("install_command") or ""),
+                install_if_missing=str(row.get("install_if_missing") or ""),
+                primary=bool(row.get("primary", False)),
+            )
+        )
+    return services
+
+
+def str_or_fallback(value: object, fallback: str) -> str:
+    """Return non-empty TOML strings while preserving default preview templates."""
+
+    if value is None:
+        return fallback
+    rendered = str(value).strip()
+    return rendered or fallback
 
 
 def write_default_config(repo_root: Path, force: bool = False) -> Path:
@@ -193,11 +222,14 @@ def render_config(cfg: FleetConfig) -> str:
         [
             "[preview]",
             f"dashboard_port = {preview.dashboard_port}",
-            f'api_dir = "{preview.api_dir}"',
-            f'ui_dir = "{preview.ui_dir}"',
-            f'data_dir = "{preview.data_dir}"',
-            f'api_command = "{_escape(preview.api_command)}"',
-            f'ui_command = "{_escape(preview.ui_command)}"',
+            "# Add one or more [[preview.services]] blocks for your app.",
+            "# Example:",
+            "# [[preview.services]]",
+            '# name = "web"',
+            '# dir = "app"',
+            "# port_base = 3000",
+            '# command = "npm run dev -- --port {port}"',
+            "# primary = true",
             "",
         ]
     )
