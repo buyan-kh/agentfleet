@@ -198,6 +198,9 @@ def explicit_worktrees(cfg: FleetConfig, paths: list[Path]) -> list[AgentSlot]:
     slots: list[AgentSlot] = []
     for index, path in enumerate(paths, start=1):
         resolved = path.resolve()
+        if not resolved.exists():
+            print(f"Skipping missing worktree: {resolved}")
+            continue
         slots.append(
             AgentSlot(
                 kind="agent",

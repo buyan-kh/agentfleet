@@ -108,24 +108,36 @@ def is_registered_worktree(repo_root: Path, path: Path) -> bool:
 
 
 def link_frontend_node_modules(repo_root: Path, worktree: Path) -> None:
-    """Symlink frontend dependencies when the target repo has a matching lockfile."""
+    """Symlink matching Node dependencies for any package-lock based project."""
 
-    main_app = repo_root / "the-similarity-app"
-    app = worktree / "the-similarity-app"
-    source = main_app / "node_modules"
-    target = app / "node_modules"
-    if not source.is_dir() or not app.is_dir():
-        return
-    if not same_file(main_app / "package-lock.json", app / "package-lock.json"):
-        print(f"  skip node_modules link for {worktree.name}: lockfile differs or missing")
-        return
-    if target.is_symlink():
-        return
-    if target.exists():
-        print(f"  keep existing node_modules: {target}")
-        return
-    target.symlink_to(source, target_is_directory=True)
-    print(f"  linked node_modules in {worktree.name}")
+    for lockfile in repo_root.rglob("package-lock.json"):
+        if ignored_dependency_path(lockfile, repo_root):
+            continue
+        relative_lockfile = lockfile.relative_to(repo_root)
+        worktree_lockfile = worktree / relative_lockfile
+        package_dir = lockfile.parent
+        worktree_package_dir = worktree_lockfile.parent
+        source = package_dir / "node_modules"
+        target = worktree_package_dir / "node_modules"
+        if not source.is_dir() or not worktree_package_dir.is_dir():
+            continue
+        if not same_file(lockfile, worktree_lockfile):
+            print(f"  skip node_modules link for {worktree.name}/{relative_lockfile.parent}: lockfile differs or missing")
+            continue
+        if target.is_symlink():
+            continue
+        if target.exists():
+            print(f"  keep existing node_modules: {target}")
+            continue
+        target.symlink_to(source, target_is_directory=True)
+        print(f"  linked node_modules in {worktree.name}/{relative_lockfile.parent}")
+
+
+def ignored_dependency_path(path: Path, repo_root: Path) -> bool:
+    """Return whether a dependency search path is inside generated folders."""
+
+    relative_parts = path.relative_to(repo_root).parts
+    return any(part in {".git", "node_modules"} for part in relative_parts)
 
 
 def same_file(left: Path, right: Path) -> bool:

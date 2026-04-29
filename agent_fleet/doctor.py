@@ -16,7 +16,7 @@ def run_doctor(cfg: FleetConfig, slots: list[AgentSlot], check_preview: bool = T
     failures += check("git", require_command("git"), "required for worktree isolation")
     failures += check("python", require_command("python"), "required for Python preview commands")
 
-    seen_commands = sorted({slot.command for slot in slots})
+    seen_commands = sorted({slot.command for slot in slots if slot.command})
     for command in seen_commands:
         failures += check(command, require_command(command), f"agent command for {command}")
 
