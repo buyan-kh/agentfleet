@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import html
 import http.server
 import json
@@ -34,19 +32,6 @@ ROUTES = [
 ]
 
 
-@dataclass(frozen=True)
-class PreviewProcess:
-    """Track a preview subprocess with enough context to debug early exits."""
-
-    proc: subprocess.Popen[str]
-    label: str
-    service: str
-    command: str
-    argv: list[str]
-    cwd: Path
-    log: Path
-
-
 def start_preview(cfg: FleetConfig, slots: list[AgentSlot], install_deps: bool = True) -> int:
     """Start configured preview services and serve the dashboard until interrupted."""
 
@@ -69,7 +54,7 @@ def start_preview(cfg: FleetConfig, slots: list[AgentSlot], install_deps: bool =
     state_root = cfg.resolved_state_root()
     state_root.mkdir(parents=True, exist_ok=True)
 
-    processes: list[PreviewProcess] = []
+    processes: list[subprocess.Popen[str]] = []
     try:
         for preview in preview_slots:
             processes.extend(start_preview_processes(cfg, preview, install_deps))
@@ -79,8 +64,8 @@ def start_preview(cfg: FleetConfig, slots: list[AgentSlot], install_deps: bool =
         print_summary(cfg, preview_slots)
         wait_forever(processes, server)
     finally:
-        for tracked in processes:
-            stop_process(tracked.proc.pid)
+        for proc in processes:
+            stop_process(proc.pid)
         clear_state(cfg)
     return 0
 
@@ -227,10 +212,10 @@ def port_is_free(port: int) -> bool:
 
 def start_preview_processes(
     cfg: FleetConfig, preview: PreviewSlot, install_deps: bool
-) -> list[PreviewProcess]:
+) -> list[subprocess.Popen[str]]:
     """Start the configured service commands for one preview slot."""
 
-    processes: list[PreviewProcess] = []
+    processes: list[subprocess.Popen[str]] = []
     for service in preview.services:
         service.log.parent.mkdir(parents=True, exist_ok=True)
         if install_deps and service.install_if_missing and service.install_command:
@@ -244,26 +229,15 @@ def start_preview_processes(
         for key, value in service.env.items():
             env[key] = render_service_template(value, preview, service)
 
-        rendered = render_service_template(service.command, preview, service)
-        argv = split_command(rendered)
         log_handle = service.log.open("w", encoding="utf-8")
-        proc = subprocess.Popen(
-            argv,
-            cwd=service.directory,
-            env=env,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
         processes.append(
-            PreviewProcess(
-                proc=proc,
-                label=preview.slot.label,
-                service=service.name,
-                command=rendered,
-                argv=argv,
+            subprocess.Popen(
+                split_command(render_service_template(service.command, preview, service)),
                 cwd=service.directory,
-                log=service.log,
+                env=env,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
             )
         )
     return processes
@@ -307,132 +281,6 @@ def split_command(command: str) -> list[str]:
     import shlex
 
     return shlex.split(command)
-
-
-def write_dashboard(cfg: FleetConfig, previews: list[PreviewSlot]) -> Path:
-    """Write a live preview wall with embedded UI frames."""
-
-    dashboard_dir = cfg.resolved_state_root() / "dashboard"
-    dashboard_dir.mkdir(parents=True, exist_ok=True)
-    cards = "\n".join(render_card(preview) for preview in previews)
-    path = dashboard_dir / "index.html"
-    path.write_text(
-        f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentFleet Preview Wall</title>
-  <style>
-    :root {{
-      --bg:
-        radial-gradient(circle at 18% 12%, rgba(232, 196, 176, .58), transparent 28%),
-        radial-gradient(circle at 78% 6%, rgba(91, 138, 114, .50), transparent 32%),
-        radial-gradient(circle at 62% 88%, rgba(194, 101, 92, .28), transparent 34%),
-        linear-gradient(160deg, #4a7a5a 0%, #6b9a72 25%, #c4b896 55%, #8a6a4a 80%, #3d2f1f 100%);
-      --surface: rgba(255,255,255,.78);
-      --ink: #171714;
-      --muted: #6f7168;
-      --line: rgba(22,22,20,.12);
-      --accent: #3d6650;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      background-attachment: fixed;
-      color: var(--ink);
-    }}
-    .shell {{
-      min-height: 100vh;
-      display: grid;
-      grid-template-columns: 260px 1fr;
-      gap: 16px;
-      padding: 16px;
-    }}
-    aside, .card {{
-      border: 1px solid rgba(255,255,255,.52);
-      background: var(--surface);
-      backdrop-filter: blur(20px) saturate(120%);
-      box-shadow: 0 24px 80px rgba(38,43,31,.18);
-      border-radius: 16px;
-    }}
-    aside {{ padding: 18px; }}
-    h1 {{
-      margin: 0;
-      font-family: Georgia, "Times New Roman", serif;
-      font-size: 34px;
-      line-height: .96;
-      font-weight: 400;
-      letter-spacing: -.03em;
-    }}
-    .copy {{ color: var(--muted); line-height: 1.45; font-size: 13px; }}
-    .stat-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 18px 0; }}
-    .stat {{ border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: rgba(255,255,255,.55); }}
-    .label {{ color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }}
-    .value {{ margin-top: 2px; font-family: Georgia, serif; font-size: 28px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 16px; }}
-    .card {{ overflow: hidden; }}
-    .card-head {{ padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; align-items: start; }}
-    .card h2 {{ margin: 2px 0 0; font-size: 16px; }}
-    .links {{ display: flex; gap: 8px; flex-wrap: wrap; }}
-    .pill {{ display: inline-block; padding: 7px 10px; border-radius: 999px; background: #fff; border: 1px solid var(--line); color: var(--accent); font-weight: 700; text-decoration: none; font-size: 12px; }}
-    iframe {{ width: 100%; height: 420px; display: block; border: 0; background: #fff; }}
-    .meta {{ padding: 12px 16px; display: grid; gap: 8px; border-top: 1px solid var(--line); }}
-    code {{ display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: rgba(255,255,255,.66); border: 1px solid var(--line); border-radius: 9px; padding: 8px; font-size: 12px; }}
-    @media (max-width: 900px) {{ .shell {{ grid-template-columns: 1fr; }} .grid {{ grid-template-columns: 1fr; }} }}
-  </style>
-</head>
-<body>
-  <div class="shell">
-    <aside>
-      <div class="label">AgentFleet</div>
-      <h1>Preview Wall</h1>
-      <p class="copy">Local review wall for agent worktrees. Each card embeds a live UI preview backed by its isolated API and worktree.</p>
-      <div class="stat-grid">
-        <div class="stat"><div class="label">Agents</div><div class="value">{len(previews)}</div></div>
-        <div class="stat"><div class="label">Dashboard</div><div class="value">{cfg.preview.dashboard_port}</div></div>
-      </div>
-      <p class="copy">Generated at <code>{html.escape(str(path))}</code></p>
-    </aside>
-    <main class="grid">
-      {cards}
-    </main>
-  </div>
-</body>
-</html>
-""",
-        encoding="utf-8",
-    )
-    return path
-
-
-def render_card(preview: PreviewSlot) -> str:
-    """Render one live preview card."""
-
-    slot = preview.slot
-    return f"""<article class="card">
-  <div class="card-head">
-    <div>
-      <div class="label">{html.escape(slot.label)}</div>
-      <h2>{html.escape(slot.branch)}</h2>
-    </div>
-    <div class="links">
-      <a class="pill" href="{preview.ui_url}" target="_blank" rel="noreferrer">UI :{preview.ui_port}</a>
-      <a class="pill" href="{preview.api_url}" target="_blank" rel="noreferrer">API :{preview.api_port}</a>
-    </div>
-  </div>
-  <iframe src="{preview.ui_url}" loading="lazy" title="{html.escape(slot.label)} preview"></iframe>
-  <div class="meta">
-    <div class="label">Worktree</div>
-    <code>{html.escape(str(slot.path))}</code>
-    <div class="label">Logs</div>
-    <code>{html.escape(str(preview.api_log))}</code>
-    <code>{html.escape(str(preview.ui_log))}</code>
-  </div>
-</article>"""
 
 
 def write_dashboard(cfg: FleetConfig, previews: list[PreviewSlot]) -> Path:
@@ -842,34 +690,15 @@ def print_summary(cfg: FleetConfig, previews: list[PreviewSlot]) -> None:
 
 
 def wait_forever(
-    processes: list[PreviewProcess], server: http.server.ThreadingHTTPServer
+    processes: list[subprocess.Popen[str]], server: http.server.ThreadingHTTPServer
 ) -> None:
     """Wait until interrupted or a child preview exits."""
 
     try:
         while True:
-            for tracked in processes:
-                proc = tracked.proc
+            for proc in processes:
                 if proc.poll() is not None:
-                    hint = ""
-                    if proc.returncode == 127:
-                        exe = tracked.argv[0] if tracked.argv else "(empty command)"
-                        hint = (
-                            "\nExit code 127 usually means the executable was not found on PATH.\n"
-                            f"argv0: {exe}\n"
-                            "Fix: install the tool, use an absolute path, or ensure your terminal PATH is visible to GUI apps."
-                        )
-                    raise SystemExit(
-                        "Preview process exited early:\n"
-                        f"  slot: {tracked.label}\n"
-                        f"  service: {tracked.service}\n"
-                        f"  cwd: {tracked.cwd}\n"
-                        f"  command: {tracked.command}\n"
-                        f"  argv: {tracked.argv}\n"
-                        f"  log: {tracked.log}\n"
-                        f"exit code: {proc.returncode}"
-                        f"{hint}"
-                    )
+                    raise SystemExit(f"Preview process exited early with code {proc.returncode}.")
             time.sleep(1)
     except KeyboardInterrupt:
         print("\nStopping preview fleet...")
@@ -877,12 +706,12 @@ def wait_forever(
         server.shutdown()
 
 
-def write_state(cfg: FleetConfig, previews: list[PreviewSlot], processes: list[PreviewProcess]) -> None:
+def write_state(cfg: FleetConfig, previews: list[PreviewSlot], processes: list[subprocess.Popen[str]]) -> None:
     """Persist enough process state for ``status`` and ``stop``."""
 
     state = {
         "dashboard_port": cfg.preview.dashboard_port,
-        "processes": [tracked.proc.pid for tracked in processes],
+        "processes": [proc.pid for proc in processes],
         "previews": [
             {
                 "label": preview.slot.label,
