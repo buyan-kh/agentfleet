@@ -2,8 +2,6 @@
 
 Run multiple coding agents in isolated git worktrees from one CLI.
 
-GitHub: https://github.com/buyan-kh/agentfleet
-
 If AgentFleet helps your workflow, please star the project.
 
 ## Install
