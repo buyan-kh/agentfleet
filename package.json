@@ -1,6 +1,6 @@
 {
   "name": "@buyan14/agentfleet",
-  "version": "0.1.3",
+  "version": "0.2.6",
   "description": "Local multi-agent worktree fleet manager",
   "bin": {
     "agentfleet": "bin/agentfleet.js"
