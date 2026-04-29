@@ -10,7 +10,6 @@ Open source · MIT · **[github.com/buyan-kh/agentfleet](https://github.com/buya
 
 <video src="https://raw.githubusercontent.com/buyan-kh/agentfleet/main/agentfleet2.mp4" controls playsinline preload="metadata" width="720"></video>
 
-[agentfleet2.mp4](agentfleet2.mp4) (H.264) · [raw](https://raw.githubusercontent.com/buyan-kh/agentfleet/main/agentfleet2.mp4)
 ## Install
 
 **Recommended (global npm):**
@@ -38,14 +37,14 @@ Workflow in one line: **`init → doctor → setup → launch → preview`**
 
 ## Workflow
 
-| Phase | Command | What it does |
-|-------|---------|--------------|
-| Configure | `agentfleet init` | Writes `agentfleet.toml` |
-| Verify | `agentfleet doctor` | CLIs, Python, git, paths |
-| Worktrees | `agentfleet setup` | Fleet worktrees |
-| Terminals | `agentfleet launch` | Ghostty, tmux, iTerm, or print-only |
-| Preview | `agentfleet preview` | Dashboard + services from TOML |
-| Ops | `agentfleet status` / `stop` / `clean` | Fleet lifecycle |
+| Phase     | Command                                | What it does                        |
+| --------- | -------------------------------------- | ----------------------------------- |
+| Configure | `agentfleet init`                      | Writes `agentfleet.toml`            |
+| Verify    | `agentfleet doctor`                    | CLIs, Python, git, paths            |
+| Worktrees | `agentfleet setup`                     | Fleet worktrees                     |
+| Terminals | `agentfleet launch`                    | Ghostty, tmux, iTerm, or print-only |
+| Preview   | `agentfleet preview`                   | Dashboard + services from TOML      |
+| Ops       | `agentfleet status` / `stop` / `clean` | Fleet lifecycle                     |
 
 ## Example session
 
@@ -61,13 +60,13 @@ Before `preview.services`: you get a short checklist to finish config. After: da
 
 ## Terminals (`launch`)
 
-| `--terminal` | Notes |
-|----------------|-------|
+| `--terminal`     | Notes                                                  |
+| ---------------- | ------------------------------------------------------ |
 | `ghostty-splits` | One window, tiled panes (macOS may need Accessibility) |
-| `ghostty` | One window per agent |
-| `tmux` | Single session |
-| `iterm` | Tabs/windows |
-| `print` | Print commands only |
+| `ghostty`        | One window per agent                                   |
+| `tmux`           | Single session                                         |
+| `iterm`          | Tabs/windows                                           |
+| `print`          | Print commands only                                    |
 
 ## Preview services
 
@@ -124,8 +123,8 @@ agentfleet upgrade
 
 ## Docs
 
-| Doc | What it covers |
-|-----|----------------|
+| Doc                                  | What it covers                                          |
+| ------------------------------------ | ------------------------------------------------------- |
 | [Installation](docs/installation.md) | npm vs source, upgrade, uninstall, interpreter override |
 
 ## Prerequisites
