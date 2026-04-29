@@ -119,7 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_count_args(launch)
     add_skip_doctor(launch)
     launch.add_argument("--link-node-modules", action="store_true", help="Symlink frontend node_modules when safe.")
-    launch.add_argument("--terminal", choices=["auto", "tmux", "iterm", "ghostty", "print"], default="auto")
+    launch.add_argument(
+        "--terminal",
+        choices=["auto", "tmux", "iterm", "ghostty", "ghostty-splits", "print"],
+        default="auto",
+    )
     launch.add_argument(
         "--tmux-layout",
         choices=["panes", "windows"],

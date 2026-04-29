@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from .commands import require_command, run, sh_quote
@@ -163,6 +164,8 @@ def launch_fleet(
         launch_iterm(slots)
     elif chosen == "ghostty":
         launch_ghostty(slots)
+    elif chosen == "ghostty-splits":
+        launch_ghostty_splits(slots)
     elif chosen == "print":
         print_launch_hints(slots)
     else:
@@ -340,6 +343,91 @@ def launch_ghostty(slots: list[AgentSlot]) -> None:
         raise SystemExit("Ghostty launching is only supported on systems with `open`.")
     for slot in slots:
         run(["open", "-na", "Ghostty", "--args", "-e", "zsh", "-lc", shell_join_cd_command(slot)])
+
+
+def launch_ghostty_splits(slots: list[AgentSlot]) -> None:
+    """Open one Ghostty window and arrange agents in native split panes.
+
+    Ghostty documents ``new_split`` as a keybinding action and enables the
+    macOS AppleScript dictionary by default, but macOS does not currently expose
+    a CLI action for "new split and run this command". This backend therefore
+    drives the documented split keybindings through System Events. It is scoped
+    to launch time and fails closed with a clear permission hint if macOS blocks
+    accessibility automation.
+    """
+
+    if not slots:
+        return
+    if not shutil.which("open"):
+        raise SystemExit("Ghostty split launching is only supported on macOS with `open`.")
+
+    first, *rest = slots
+    run(["open", "-na", "Ghostty", "--args", "-e", "zsh", "-lc", shell_join_cd_command(first)])
+    if not rest:
+        return
+
+    time.sleep(1.2)
+    for index, slot in enumerate(rest, start=2):
+        run_ghostty_split_applescript(split_script(index, shell_join_cd_command(slot)))
+
+
+def split_script(index: int, command: str) -> str:
+    """Return AppleScript that creates a split and starts an agent command."""
+
+    escaped = applescript_string(command)
+    # Build a pleasant 2x2 layout for the common four-agent case:
+    # first pane already exists, second splits right, third splits down on the
+    # right, fourth moves left and splits down. Additional panes keep splitting
+    # the currently focused pane to the right.
+    if index == 2:
+        split_keys = 'keystroke "d" using command down'
+    elif index == 3:
+        split_keys = 'keystroke "d" using {command down, shift down}'
+    elif index == 4:
+        split_keys = """
+        key code 123 using {command down, option down}
+        delay 0.15
+        keystroke "d" using {command down, shift down}
+        """.strip()
+    else:
+        split_keys = 'keystroke "d" using command down'
+
+    return f"""
+tell application "Ghostty" to activate
+delay 0.25
+set previousClipboard to the clipboard
+set the clipboard to {escaped}
+tell application "System Events"
+    tell process "Ghostty"
+        {split_keys}
+        delay 0.25
+        keystroke "v" using command down
+        key code 36
+    end tell
+end tell
+delay 0.1
+set the clipboard to previousClipboard
+"""
+
+
+def applescript_string(value: str) -> str:
+    """Quote text as an AppleScript string literal."""
+
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def run_ghostty_split_applescript(script: str) -> None:
+    """Run a Ghostty split automation script with a useful permission error."""
+
+    result = subprocess.run(["osascript", "-e", script], text=True, capture_output=True, check=False)
+    if result.returncode == 0:
+        return
+    stderr = result.stderr.strip() or result.stdout.strip()
+    raise SystemExit(
+        "Ghostty split automation failed. Grant your terminal Accessibility permission "
+        "in System Settings -> Privacy & Security -> Accessibility, then retry.\n"
+        f"osascript: {stderr}"
+    )
 
 
 def shell_join_cd_command(slot: AgentSlot) -> str:
